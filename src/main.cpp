@@ -1,0 +1,132 @@
+#include "algorithms.hpp"
+#include "io.hpp"
+#include "timer.hpp"
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+#include <filesystem>
+#include <functional>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {
+
+struct MethodRun {
+    std::string name;
+    std::function<Matrix()> multiply;
+};
+
+void printUsage(const char* programName) {
+    std::cerr << "Usage: " << programName << " <input-file> [threads] [strassen-base-case] [mode]\n"
+              << "  mode: all | Sequential | ParMtrixMult | Strassen | ParStrassen\n";
+}
+
+int availableThreads(int requestedThreads) {
+    if (requestedThreads > 0) {
+        return requestedThreads;
+    }
+
+#ifdef _OPENMP
+    return omp_get_max_threads();
+#else
+    return 1;
+#endif
+}
+
+bool shouldRunMethod(const std::string& requestedMode, const std::string& methodName) {
+    return requestedMode == "all" || requestedMode == methodName;
+}
+
+Matrix runTimedMethod(
+    const MethodRun& method,
+    const MatrixInput& input,
+    const std::filesystem::path& outputDirectory,
+    int coresUsed) {
+    ScopedTimer timer;
+    Matrix result = method.multiply();
+    const auto elapsed = timer.elapsed();
+
+    writeMatrixFile(outputDirectory, input.stem, method.name, result);
+    writeInfoFile(outputDirectory, input.stem, result.size(), method.name, formatDuration(elapsed), coresUsed);
+
+    std::cout << method.name << " completed in " << formatDuration(elapsed)
+              << " using " << coresUsed << " core(s)\n";
+    return result;
+}
+
+} // namespace
+
+int main(int argc, char* argv[]) {
+    if (argc < 2 || argc > 5) {
+        printUsage(argv[0]);
+        return 1;
+    }
+
+    try {
+        const std::filesystem::path inputPath = argv[1];
+        const int threads = argc >= 3 ? std::stoi(argv[2]) : availableThreads(0);
+        const int strassenBaseCase = argc >= 4 ? std::stoi(argv[3]) : 64;
+        const std::string mode = argc >= 5 ? argv[4] : "all";
+
+        if (threads <= 0) {
+            throw std::invalid_argument("threads must be a positive integer");
+        }
+        if (strassenBaseCase <= 0) {
+            throw std::invalid_argument("strassen-base-case must be a positive integer");
+        }
+
+#ifdef _OPENMP
+        omp_set_num_threads(threads);
+#endif
+
+        const MatrixInput input = readInputFile(inputPath);
+        const std::filesystem::path outputDirectory = std::filesystem::current_path();
+
+        std::vector<MethodRun> methods = {
+            {"Sequential", [&]() { return multiplySequential(input.a, input.b); }},
+            {"ParMtrixMult", [&]() { return multiplyParMatrixMult(input.a, input.b, threads); }},
+            {"Strassen", [&]() { return multiplyStrassen(input.a, input.b, strassenBaseCase); }},
+            {"ParStrassen", [&]() { return multiplyParStrassen(input.a, input.b, strassenBaseCase, threads); }},
+        };
+
+        bool ranAnyMethod = false;
+        Matrix reference;
+        bool hasReference = false;
+
+        for (const MethodRun& method : methods) {
+            if (!shouldRunMethod(mode, method.name)) {
+                continue;
+            }
+
+            ranAnyMethod = true;
+            Matrix result = runTimedMethod(method, input, outputDirectory, threads);
+
+            if (method.name == "Sequential") {
+                reference = result;
+                hasReference = true;
+            } else {
+                if (!hasReference) {
+                    reference = multiplySequential(input.a, input.b);
+                    hasReference = true;
+                }
+                if (!matricesEqual(reference, result)) {
+                    std::cerr << "Warning: " << method.name << " result differs from Sequential\n";
+                }
+            }
+        }
+
+        if (!ranAnyMethod) {
+            throw std::invalid_argument("unknown mode: " + mode);
+        }
+    } catch (const std::exception& error) {
+        std::cerr << "Error: " << error.what() << '\n';
+        printUsage(argv[0]);
+        return 1;
+    }
+
+    return 0;
+}
