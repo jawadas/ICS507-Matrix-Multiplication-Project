@@ -7,7 +7,7 @@ set -euo pipefail
 BINARY="./matrix_mult"
 TESTS_DIR="tests"
 SCRIPT_DIR="scripts"
-BASE_CASE=16
+BASE_CASE=4
 SEED=42
 THREAD_COUNTS=(1 2 4 6 8 10 12 14 16)
 DIMENSIONS=(32 64 128 256 512 1024 2048 4096)
@@ -28,7 +28,7 @@ done
 
 echo ""
 echo "============================================================"
-echo " Phase 1 (Windows) — base case=$BASE_CASE  threads up to 16"
+echo " Phase 1 (Windows) — base case=$BASE_CASE   threads up to 16"
 echo "============================================================"
 
 for dim in "${DIMENSIONS[@]}"; do
